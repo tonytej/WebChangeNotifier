@@ -7,14 +7,21 @@ from config import *
 from datetime import datetime
 from flask import Flask
 from slackclient import SlackClient
+import logging
+import os
+import cloudstorage as gcs
+import webapp2
+import urllib
+from bs4 import BeautifulSoup
+from google.appengine.api import app_identity
 app = Flask(__name__)
 requests_toolbelt.adapters.appengine.monkeypatch()
 
-url = ["https://tonytej.github.io/"]
+url = ["https://www.walmart.com/ip/Funko-POP-Games-Fortnite-S1-Crackshot/343459071"]
 wait_time = 1
 
 def slack_message(message, channel):
-    token = 'xoxp-465530631862-463393169456-465184222199-9e624060c31027aee867be7969dcf7ac'
+    token = ''
     sc = SlackClient(token)
     sc.api_call('chat.postMessage', channel=channel, 
                 text=message, username='My Sweet Bot',
@@ -23,7 +30,7 @@ def slack_message(message, channel):
 def send_email(user, pwd, recipient): #snippet courtesy of david / email sending function
     SUBJECT             = 'SITE UPDATED' #message subject
     body                = 'CHANGE AT ' + str(url) #message body
-    gmail_user = user
+    gmail_user = userz
     gmail_pwd = pwd
     FROM = user
     TO = recipient if type(recipient) is list else [recipient]
@@ -49,35 +56,87 @@ def send_email(user, pwd, recipient): #snippet courtesy of david / email sending
     except Exception, e: #else tell user it failed and why (exception e)
         print "[-]Failed to send notification email, " +str(e)
 
+def create_file(self, filename):
+  gcs_file = gcs.open(filename,
+                      'w',
+                      content_type='text/plain',
+                      options={'x-goog-meta-foo': 'foo',
+                               'x-goog-meta-bar': 'bar'},
+                      retry_params=write_retry_params)
+  gcs_file.write('abcde\n')
+  gcs_file.write('f'*1024*4 + '\n')
+  gcs_file.close()
+  self.tmp_filenames_to_clean_up.append(filename)
+
+def read_file(self, filename):
+
+  gcs_file = gcs.open(filename)
+  contents = gcs_file.read()
+  gcs_file.close()
+  self.response.write(contents)
+
 @app.route('/')
 def run():
-    print "[+]Starting up monitor on "
-    for e in url:
-        print e + " "
-    with requests.Session() as c:
-        try:
-            page1 = []
-            for e in url:
-                page1.append(c.get(e))
-        except Exception, e:
-            print "[-]Error Encountered during initial page retrieval: " +str(e)
-        while True:
-            time.sleep(wait_time)
-            try:
-                page2 = []
-                for e in url:
-                    page2.append(c.get(e))
-            except Exception, e:
-                print "[+]Error Encountered during comparison page retrieval: " + str(e)
-            for i in range(len(page1)):
-                if page1[i].content == page2[i].content: #if else statement to check if content of page remained same
-                    print '[-]No Change Detected on ' +str(url[i])+ "\n" +str(datetime.now())
-                else:
-                    status_string = 'Change Detected at ' +str(url[i])+ "\n" +str(datetime.now())
-                    message = status_string
-                    print "[+]"+status_string
-                    #send_email(user, pwd, recipient) #send notification email
-                    slack_message("CHANGE DETECTED AT " + url[i], "CDN9NKVU5")
+    headers = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36'}
+    for i in range(len(url)): 
+        response = requests.get(url[i], headers=headers)
+        soup = BeautifulSoup(response.content, "html.parser")
+        lst = soup.findAll("span", {"display-block-xs font-bold"})
+        if len(lst) == 1:
+            #out of stock
+            return 'Still out of stock', 200
+        else:
+            #in stock
+            slack_message("Item in stock. " + url[i], "CDN9NKVU5")
+            return 'In stock, sent slack message', 200
             
-                    print '\n[+]Retrieving new base page and restarting\n'
-                    run()
+
+
+        '''
+    bucket_name = os.environ.get('BUCKET_NAME', 'swxcs-220501.appspot.com')
+    c = requests.Session()
+    page1 = []
+    try:
+        for i in range(len(url)):
+            gcs_file = gcs.open('/'+bucket_name + '/' + urllib.quote_plus(url[i]) + '.txt')
+            content = gcs_file.read()
+            page1.append(content)
+            gcs_file.close()
+    except Exception, e:
+        for i in range(len(url)):
+            gcs_file = gcs.open('/'+bucket_name + '/' + urllib.quote_plus(url[i]) + '.txt',
+                      'w',
+                      content_type='text/plain')
+            gcs_file.write(c.get(url[i]).content)
+            gcs_file.close()
+        return 'New website detected.'
+
+    #print page1[0]
+    page2 = []
+    for e in url:
+        page2.append(c.get(e).content)
+
+    for i in range(len(page1)):
+        if page1[i] == page2[i]:
+            #print '[-]No Change Detected on ' +str(url[i])+ "\n" +str(datetime.now())
+            gcs_file = gcs.open('/'+bucket_name + '/' + urllib.quote_plus(url[i]) + '.txt',
+                          'w',
+                          content_type='text/plain')
+            gcs_file.write(c.get(url[i]).content)
+            gcs_file.close()
+            print '[-]No Change Detected on ' +str(url[i])+ "\n" +str(datetime.now())
+            
+        else:
+            #status_string = 'Change Detected at ' +str(url[i])+ "\n" +str(datetime.now())
+            #message = status_string
+            #print "[+]"+status_string
+            #slack_message("CHANGE DETECTED AT " + url[i], "CDN9NKVU5")
+            gcs_file = gcs.open('/'+bucket_name + '/' + urllib.quote_plus(url[i]) + '.txt',
+                              'w',
+                              content_type='text/plain')
+            gcs_file.write(c.get(url[i]).content)
+            gcs_file.close()
+            print 'Change Detected at ' +str(url[i])+ "\n" +str(datetime.now())
+
+    return 'OK', 200
+    '''

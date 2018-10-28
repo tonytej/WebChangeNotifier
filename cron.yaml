@@ -1,5 +1,4 @@
 cron:
 - description: "swcs"
-  url: /cron
-  target: beta
+  url: /
   schedule: every 1 mins
